@@ -14,7 +14,7 @@ mod tests {
         Blocking,
         delay::Delay,
         gpio::{AnyPin, Pin},
-        time::Duration,
+        time::{Duration, Instant},
         uart::{self, BaudrateTolerance, ClockSource, Uart},
     };
 
@@ -336,6 +336,28 @@ mod tests {
         let mut buf = [0u8; 3];
         rx.read(&mut buf).unwrap();
         assert_eq!(buf, [0xAA, 0xBB, 0xCC]);
+    }
+
+    #[test]
+    fn test_break_duration_follows_baud_rate_change(ctx: Context) {
+        let mut tx = ctx.uart0.with_tx(ctx.tx);
+        let mut rx = ctx.uart1.split().0.with_rx(ctx.rx);
+
+        // The driver was created at 115_200 baud.
+        tx.apply_config(&uart::Config::default().with_baudrate(9600))
+            .unwrap();
+
+        // 96 bits at 9600 baud take 10 ms.
+        let start = Instant::now();
+        tx.send_break(96);
+        let elapsed = start.elapsed().as_micros();
+
+        assert!(
+            (9_500..12_000).contains(&elapsed),
+            "Break took {} us, expected 10000 us",
+            elapsed
+        );
+        assert!(rx.wait_for_break_with_timeout(Duration::from_secs(1)));
     }
 
     #[test]
