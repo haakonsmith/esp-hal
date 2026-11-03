@@ -15,6 +15,17 @@ const PARTITION_TABLE_OFFSET: u32 =
 
 const RAW_ENTRY_LEN: usize = 32;
 
+/// Returns whether flash encryption is enabled.
+fn flash_encryption_enabled() -> bool {
+    #[cfg(feature = "std")]
+    let enabled = false;
+
+    #[cfg(not(feature = "std"))]
+    let enabled = esp_hal::efuse::flash_encryption();
+
+    enabled
+}
+
 mod entry;
 mod image;
 #[cfg(feature = "embedded-storage")]
@@ -25,6 +36,7 @@ mod types;
 
 pub use self::{
     entry::PartitionEntry,
+    image::image_sha256,
     region::{AutoFlashRegion, EncryptedFlashRegion, FlashRegion},
     table::{PartitionTable, read_partition_table},
     types::{

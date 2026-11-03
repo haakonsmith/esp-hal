@@ -1,4 +1,4 @@
-use super::{Error, FlashStorage, PartitionEntry, PartitionType};
+use super::{Error, FlashStorage, PartitionEntry, PartitionType, flash_encryption_enabled};
 use crate::flash::FlashAccess;
 
 impl PartitionEntry {
@@ -16,32 +16,61 @@ impl PartitionEntry {
             return Err(Error::InvalidArgument);
         }
 
-        let address = self.offset();
         let encrypted = self.is_effectively_encrypted();
-        let mut size = self.len();
 
-        if matches!(
-            self.partition_type(),
-            PartitionType::App(_) | PartitionType::Bootloader(_)
-        ) {
-            let data = get_image_metadata(flash, address, size, encrypted)?;
-            if data.hash_appended {
-                let calc = sha256_flash_contents(
-                    flash,
-                    address,
-                    data.image_len - PARTITION_HASH_LEN as u32,
-                    encrypted,
-                )?;
-                if calc != data.image_digest {
-                    return Err(Error::InvalidImage);
-                }
-                return Ok(data.image_digest);
+        match self.partition_type() {
+            PartitionType::App(_) | PartitionType::Bootloader(_) => {
+                image_digest(flash, self.offset(), self.len(), encrypted)
             }
-            size = data.image_len;
+            _ => sha256_flash_contents(flash, self.offset(), self.len(), encrypted),
         }
-
-        sha256_flash_contents(flash, address, size, encrypted)
     }
+}
+
+/// Calculates the SHA-256 digest of the app or bootloader image at `offset`.
+///
+/// The digest is the same as [`PartitionEntry::sha256`] returns for an app or bootloader
+/// partition. Use this function for an image that the partition table does not list, such as the
+/// second-stage bootloader. The image must end in the `len` bytes from `offset`.
+///
+/// # Errors
+///
+/// - [`Error::InvalidArgument`] when `len` is 0 or more than 16 MB.
+/// - [`Error::InvalidImage`] when there is no image at `offset`, the image is longer than `len`, or
+///   its appended digest does not match the image.
+pub fn image_sha256(
+    flash: &mut FlashStorage<'_>,
+    offset: u32,
+    len: u32,
+) -> Result<[u8; 32], Error> {
+    // App and bootloader images are always encrypted when flash encryption is enabled
+    image_digest(flash, offset, len, flash_encryption_enabled())
+}
+
+/// Returns the appended digest of the image at `address` after it verifies the digest, or the
+/// digest of the image when it has none.
+fn image_digest<F: FlashAccess>(
+    flash: &mut F,
+    address: u32,
+    size: u32,
+    encrypted: bool,
+) -> Result<[u8; PARTITION_HASH_LEN], Error> {
+    let data = get_image_metadata(flash, address, size, encrypted)?;
+    if !data.hash_appended {
+        return sha256_flash_contents(flash, address, data.image_len, encrypted);
+    }
+
+    let calc = sha256_flash_contents(
+        flash,
+        address,
+        data.image_len - PARTITION_HASH_LEN as u32,
+        encrypted,
+    )?;
+    if calc != data.image_digest {
+        return Err(Error::InvalidImage);
+    }
+
+    Ok(data.image_digest)
 }
 
 const PARTITION_HASH_LEN: usize = 32;
@@ -292,5 +321,27 @@ mod tests {
         flash.write(factory.offset() + 32, &[0u8; 32]).unwrap();
 
         assert_eq!(factory.sha256(&mut flash), Err(Error::InvalidImage));
+    }
+
+    #[test]
+    fn image_sha256_of_image_the_table_does_not_list() {
+        let mut flash = test_flash();
+
+        // The second-stage bootloader, which the partition table has no entry for
+        write_minimal_app_image(&mut flash, 0, true);
+
+        assert_eq!(
+            image_sha256(&mut flash, 0, PARTITION_TABLE_OFFSET).unwrap(),
+            IMAGE_DIGEST_WITH_HASH_FLAG
+        );
+    }
+
+    #[test]
+    fn image_sha256_rejects_image_longer_than_len() {
+        let mut flash = test_flash();
+
+        write_minimal_app_image(&mut flash, 0, true);
+
+        assert_eq!(image_sha256(&mut flash, 0, 32), Err(Error::InvalidImage));
     }
 }

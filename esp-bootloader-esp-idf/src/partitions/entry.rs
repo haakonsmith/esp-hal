@@ -87,11 +87,7 @@ impl PartitionEntry {
     /// - is flash encryption enabled, otherwise this will always return false
     /// - certain partition types are always encrypted, no matter what the partition table says
     pub(crate) fn is_effectively_encrypted(&self) -> bool {
-        #[cfg(feature = "std")]
-        let enabled = false;
-
-        #[cfg(not(feature = "std"))]
-        let enabled = esp_hal::efuse::flash_encryption();
+        let enabled = super::flash_encryption_enabled();
 
         // Same types as `is_partition_encrypted` in ESP-IDF, minus TEE OTA, which this crate
         // does not know: <https://github.com/espressif/esp-idf/blob/188e3e55bb20505b5fa9dc49ee390bf42c58b4ee/components/esp_partition/partition.c#L73-L94>
